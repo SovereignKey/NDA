@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "nda-server", "runtimeExecutable": "python3", "runtimeArgs": ["server.py"], "env": {"PORT": "8790"}, "port": 8790 }
+  ]
+}
