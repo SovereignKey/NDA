@@ -249,7 +249,10 @@ window.NDA_CONFIG = {
   // (static hosting or as an attachment). Set this to your own address.
   returnEmail: "mhuberty@gspartners.com",
   returnName: "Matt Huberty",
-  // Endpoint the page posts the signed record to. Leave as-is when using server.py.
+  // Where the signed record is delivered automatically.
+  //   "/api/sign"  = the bundled server.py (when the page is served by it)
+  //   "https://script.google.com/macros/s/\u2026/exec" = the Google Apps Script receiver in apps-script/Code.gs
+  //   ""           = no automatic delivery; the signer emails the PDF (share sheet on phones, mailto on desktop)
   submitUrl: "/api/sign",
   // Display name for the GSP signer on the countersignature page (optional prefill).
   gspSigner: { name: "", title: "" }
@@ -666,6 +669,17 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   const MODE = qs.get('countersign') ? 'countersign' : 'sign';
   const TOKEN = qs.get('token') || '';
   const state = { scrolled:false, sigMethod:'draw', drawn:false, record:null, counterpartyRecord:null, recordId: qs.get('countersign') };
+  // Delivery endpoint: either the bundled server.py (relative "/api/sign") or a remote receiver such as a
+  // Google Apps Script web app (absolute https URL). Remote posts use text/plain to avoid a CORS preflight.
+  const API = (CFG.submitUrl || '').trim();
+  const REMOTE = /^https?:\/\//i.test(API);
+  const CAN_DELIVER = !!API && (REMOTE || /^https?:$/.test(location.protocol));
+  async function apiPost(url, payload){
+    const r = await fetch(url, {method:'POST', redirect:'follow', headers:{'Content-Type': REMOTE ? 'text/plain;charset=utf-8' : 'application/json'}, body: JSON.stringify(payload)});
+    const j = await r.json().catch(() => ({}));
+    if(!r.ok || j.error) throw new Error(j.error || `Server responded ${r.status}`);
+    return j;
+  }
 
   // ---------- helpers ----------
   const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -839,6 +853,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     const hasSig = state.sigMethod==='draw' ? state.drawn : !!$('typedName').value.trim();
     if(!hasSig) todo.push('Add your signature');
     if(!$('consent').checked) todo.push('Confirm the acknowledgement');
+    if(MODE === 'countersign' && !state.counterpartyRecord) todo.push('The signing record could not be loaded');
     $('todo').innerHTML = todo.map(t => `<li>${t}</li>`).join('');
     $('signBtn').disabled = todo.length > 0;
     const detailsOk = MODE==='countersign' ? !!(f.signer.name && f.signer.title) : !(todo[0] === 'Complete the counterparty details');
@@ -989,14 +1004,15 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       const pdfB64 = doc.output('datauristring').split(',')[1];
       // Try to deliver to the server; fall back to download + email.
       let delivered = false, serverMsg = '';
-      if(/^https?:$/.test(location.protocol) && CFG.submitUrl){
+      if(CAN_DELIVER){
+        btn.textContent = 'Delivering your signed agreement\u2026';
         try{
-          const url = MODE === 'sign' ? CFG.submitUrl : `/api/countersign/${encodeURIComponent(state.recordId)}?token=${encodeURIComponent(TOKEN)}`;
-          const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({record:rec, pdf:pdfB64, fileName:fileName(rec)})});
-          const j = await r.json().catch(() => ({}));
-          if(r.ok){ delivered = true; state.recordId = j.id || state.recordId; serverMsg = j.message || ''; }
-          else serverMsg = j.error || `Server responded ${r.status}`;
-        }catch(e){ serverMsg = 'Could not reach the server'; }
+          let j;
+          if(MODE === 'sign') j = await apiPost(API, {action:'sign', record:rec, pdf:pdfB64, fileName:fileName(rec)});
+          else if(REMOTE) j = await apiPost(API, {action:'countersign', id:state.recordId, token:TOKEN, record:rec, pdf:pdfB64, fileName:fileName(rec)});
+          else j = await apiPost(`/api/countersign/${encodeURIComponent(state.recordId)}?token=${encodeURIComponent(TOKEN)}`, {record:rec, pdf:pdfB64, fileName:fileName(rec)});
+          delivered = true; state.recordId = j.id || state.recordId; serverMsg = j.message || '';
+        }catch(e){ serverMsg = e.message || 'Could not reach the server'; }
       }
       state.record = rec;
       showDone(rec, doc, delivered, serverMsg);
@@ -1069,9 +1085,11 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       $('signBtn').textContent = 'Countersign & Execute Agreement';
       if(CFG.gspSigner){ if(CFG.gspSigner.name) $('sgName').value = CFG.gspSigner.name; if(CFG.gspSigner.title) $('sgTitle').value = CFG.gspSigner.title; }
       try{
-        const r = await fetch(`/api/record/${encodeURIComponent(state.recordId)}?token=${encodeURIComponent(TOKEN)}`);
-        if(!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Server responded ${r.status}`);
-        const rec = await r.json();
+        const recUrl = REMOTE ? `${API}${API.includes('?') ? '&' : '?'}action=record&id=${encodeURIComponent(state.recordId)}&token=${encodeURIComponent(TOKEN)}`
+                              : `/api/record/${encodeURIComponent(state.recordId)}?token=${encodeURIComponent(TOKEN)}`;
+        const r = await fetch(recUrl, {redirect:'follow'});
+        const rec = await r.json().catch(() => ({error:`Server responded ${r.status}`}));
+        if(!r.ok || rec.error) throw new Error(rec.error || `Server responded ${r.status}`);
         state.counterpartyRecord = rec;
         if(rec.gsp){ state.record = rec; }
         ['cpName','cpEntity','cpAddress','cpEmail'].forEach((id,i) => { $(id).value = rec.counterparty[['name','entity','address','email'][i]]; $(id).readOnly = true; });

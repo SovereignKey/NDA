@@ -39,6 +39,17 @@ https://<your-host>/?name=First%20Last&email=name%40company.com
 
 Other prefill parameters: `company`, `entity`, `address`, `title`.
 
+## Automatic delivery of signed copies
+
+The page is hosted at https://sovereignkey.github.io/NDA/ (GitHub Pages, from `docs/`). GitHub Pages
+cannot receive the signed PDF, so set `submitUrl` in `config.js` to a receiver:
+
+- **Google Apps Script** (recommended, free, runs under your Google account): see
+  [apps-script/DEPLOY.md](apps-script/DEPLOY.md). Signed PDFs land in a Drive folder and are emailed to
+  you and to the signer the moment the counterparty signs; you countersign from a link in that email.
+- **server.py** (below) when you host the page yourself.
+- Empty: no automatic delivery. The signer sends the PDF via the share sheet (phones) or a prefilled email (desktop).
+
 ## Sharing the link with the counterparty
 
 The server must be reachable from the internet for the "click through" link to work. Options,
